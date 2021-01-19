@@ -1,6 +1,6 @@
 /**********************************************************************************************
 *
-*   raudio - A simple and easy-to-use audio library based on miniaudio
+*   raudio v1.0 - A simple and easy-to-use audio library based on miniaudio
 *
 *   FEATURES:
 *       - Manage audio device (init/close)
@@ -46,7 +46,7 @@
 *
 *   LICENSE: zlib/libpng
 *
-*   Copyright (c) 2013-2020 Ramon Santamaria (@raysan5)
+*   Copyright (c) 2013-2021 Ramon Santamaria (@raysan5)
 *
 *   This software is provided "as-is", without any express or implied warranty. In no event
 *   will the authors be held liable for any damages arising from the use of this software.
@@ -386,8 +386,8 @@ static Wave LoadMP3(const unsigned char *fileData, unsigned int fileSize);   // 
 #if defined(RAUDIO_STANDALONE)
 static bool IsFileExtension(const char *fileName, const char *ext); // Check file extension
 static unsigned char *LoadFileData(const char *fileName, unsigned int *bytesRead);     // Load file data as byte array (read)
-static void SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite); // Save data to file from byte array (write)
-static void SaveFileText(const char *fileName, char *text);         // Save text data to file (write), string must be '\0' terminated
+static bool SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite); // Save data to file from byte array (write)
+static bool SaveFileText(const char *fileName, char *text);         // Save text data to file (write), string must be '\0' terminated
 #endif
 
 //----------------------------------------------------------------------------------
@@ -632,18 +632,16 @@ void SetAudioBufferVolume(AudioBuffer *buffer, float volume)
 // Set pitch for an audio buffer
 void SetAudioBufferPitch(AudioBuffer *buffer, float pitch)
 {
-    if (buffer != NULL)
+    if ((buffer != NULL) && (pitch > 0.0f))
     {
-        float pitchMul = pitch/buffer->pitch;
-
         // Pitching is just an adjustment of the sample rate.
         // Note that this changes the duration of the sound:
         //  - higher pitches will make the sound faster
         //  - lower pitches make it slower
-        ma_uint32 newOutputSampleRate = (ma_uint32)((float)buffer->converter.config.sampleRateOut/pitchMul);
-        buffer->pitch *= (float)buffer->converter.config.sampleRateOut/newOutputSampleRate;
+        ma_uint32 outputSampleRate = (ma_uint32)((float)buffer->converter.config.sampleRateOut/pitch);
+        ma_data_converter_set_rate(&buffer->converter, buffer->converter.config.sampleRateIn, outputSampleRate);
 
-        ma_data_converter_set_rate(&buffer->converter, buffer->converter.config.sampleRateIn, newOutputSampleRate);
+        buffer->pitch = pitch;
     }
 }
 
@@ -768,7 +766,11 @@ Sound LoadSoundFromWave(Wave wave)
         if (frameCount == 0) TRACELOG(LOG_WARNING, "SOUND: Failed to get frame count for format conversion");
 
         AudioBuffer *audioBuffer = LoadAudioBuffer(AUDIO_DEVICE_FORMAT, AUDIO_DEVICE_CHANNELS, AUDIO_DEVICE_SAMPLE_RATE, frameCount, AUDIO_BUFFER_USAGE_STATIC);
-        if (audioBuffer == NULL) TRACELOG(LOG_WARNING, "SOUND: Failed to create buffer");
+        if (audioBuffer == NULL)
+        {
+            TRACELOG(LOG_WARNING, "SOUND: Failed to create buffer");
+            return sound; // early return to avoid dereferencing the audioBuffer null pointer
+        }
 
         frameCount = (ma_uint32)ma_convert_frames(audioBuffer->data, frameCount, AUDIO_DEVICE_FORMAT, AUDIO_DEVICE_CHANNELS, AUDIO_DEVICE_SAMPLE_RATE, wave.data, frameCountIn, formatIn, wave.channels, wave.sampleRate);
         if (frameCount == 0) TRACELOG(LOG_WARNING, "SOUND: Failed format conversion");
@@ -812,7 +814,7 @@ void UpdateSound(Sound sound, const void *data, int samplesCount)
 }
 
 // Export wave data to file
-void ExportWave(Wave wave, const char *fileName)
+bool ExportWave(Wave wave, const char *fileName)
 {
     bool success = false;
 
@@ -824,17 +826,20 @@ void ExportWave(Wave wave, const char *fileName)
     {
         // Export raw sample data (without header)
         // NOTE: It's up to the user to track wave parameters
-        SaveFileData(fileName, wave.data, wave.sampleCount*wave.channels*wave.sampleSize/8);
-        success = true;
+        success = SaveFileData(fileName, wave.data, wave.sampleCount*wave.sampleSize/8);
     }
 
     if (success) TRACELOG(LOG_INFO, "FILEIO: [%s] Wave data exported successfully", fileName);
     else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to export wave data", fileName);
+
+    return success;
 }
 
 // Export wave sample data to code (.h)
-void ExportWaveAsCode(Wave wave, const char *fileName)
+bool ExportWaveAsCode(Wave wave, const char *fileName)
 {
+    bool success = false;
+
 #ifndef TEXT_BYTES_PER_LINE
     #define TEXT_BYTES_PER_LINE     20
 #endif
@@ -878,9 +883,11 @@ void ExportWaveAsCode(Wave wave, const char *fileName)
     bytesCount += sprintf(txtData + bytesCount, "0x%x };\n", ((unsigned char *)wave.data)[waveDataSize - 1]);
 
     // NOTE: Text data length exported is determined by '\0' (NULL) character
-    SaveFileText(fileName, txtData);
+    success = SaveFileText(fileName, txtData);
 
     RL_FREE(txtData);
+
+    return success;
 }
 
 // Play a sound
@@ -1007,10 +1014,10 @@ void SetSoundPitch(Sound sound, float pitch)
 // Convert wave data to desired format
 void WaveFormat(Wave *wave, int sampleRate, int sampleSize, int channels)
 {
-    ma_format formatIn  = ((wave->sampleSize == 8)? ma_format_u8 : ((wave->sampleSize == 16)? ma_format_s16 : ma_format_f32));
-    ma_format formatOut = ((      sampleSize == 8)? ma_format_u8 : ((      sampleSize == 16)? ma_format_s16 : ma_format_f32));
+    ma_format formatIn = ((wave->sampleSize == 8)? ma_format_u8 : ((wave->sampleSize == 16)? ma_format_s16 : ma_format_f32));
+    ma_format formatOut = ((sampleSize == 8)? ma_format_u8 : ((sampleSize == 16)? ma_format_s16 : ma_format_f32));
 
-    ma_uint32 frameCountIn = wave->sampleCount;  // Is wave->sampleCount actually the frame count? That terminology needs to change, if so.
+    ma_uint32 frameCountIn = wave->sampleCount/wave->channels;
 
     ma_uint32 frameCount = (ma_uint32)ma_convert_frames(NULL, 0, formatOut, channels, sampleRate, NULL, frameCountIn, formatIn, wave->channels, wave->sampleRate);
     if (frameCount == 0)
@@ -1028,7 +1035,7 @@ void WaveFormat(Wave *wave, int sampleRate, int sampleSize, int channels)
         return;
     }
 
-    wave->sampleCount = frameCount;
+    wave->sampleCount = frameCount*channels;
     wave->sampleSize = sampleSize;
     wave->sampleRate = sampleRate;
     wave->channels = channels;
@@ -1041,12 +1048,12 @@ Wave WaveCopy(Wave wave)
 {
     Wave newWave = { 0 };
 
-    newWave.data = RL_MALLOC(wave.sampleCount*wave.sampleSize/8*wave.channels);
+    newWave.data = RL_MALLOC(wave.sampleCount*wave.sampleSize/8);
 
     if (newWave.data != NULL)
     {
         // NOTE: Size must be provided in bytes
-        memcpy(newWave.data, wave.data, wave.sampleCount*wave.channels*wave.sampleSize/8);
+        memcpy(newWave.data, wave.data, wave.sampleCount*wave.sampleSize/8);
 
         newWave.sampleCount = wave.sampleCount;
         newWave.sampleRate = wave.sampleRate;
@@ -1066,9 +1073,9 @@ void WaveCrop(Wave *wave, int initSample, int finalSample)
     {
         int sampleCount = finalSample - initSample;
 
-        void *data = RL_MALLOC(sampleCount*wave->sampleSize/8*wave->channels);
+        void *data = RL_MALLOC(sampleCount*wave->sampleSize/8);
 
-        memcpy(data, (unsigned char *)wave->data + (initSample*wave->channels*wave->sampleSize/8), sampleCount*wave->channels*wave->sampleSize/8);
+        memcpy(data, (unsigned char *)wave->data + (initSample*wave->channels*wave->sampleSize/8), sampleCount*wave->sampleSize/8);
 
         RL_FREE(wave->data);
         wave->data = data;
@@ -1076,23 +1083,29 @@ void WaveCrop(Wave *wave, int initSample, int finalSample)
     else TRACELOG(LOG_WARNING, "WAVE: Crop range out of bounds");
 }
 
-// Get samples data from wave as a floats array
-// NOTE: Returned sample values are normalized to range [-1..1]
-float *GetWaveData(Wave wave)
+// Load samples data from wave as a floats array
+// NOTE 1: Returned sample values are normalized to range [-1..1]
+// NOTE 2: Sample data allocated should be freed with UnloadWaveSamples()
+float *LoadWaveSamples(Wave wave)
 {
-    float *samples = (float *)RL_MALLOC(wave.sampleCount*wave.channels*sizeof(float));
+    float *samples = (float *)RL_MALLOC(wave.sampleCount*sizeof(float));
+
+    // NOTE: sampleCount is the total number of interlaced samples (including channels)
 
     for (unsigned int i = 0; i < wave.sampleCount; i++)
     {
-        for (unsigned int j = 0; j < wave.channels; j++)
-        {
-            if (wave.sampleSize == 8) samples[wave.channels*i + j] = (float)(((unsigned char *)wave.data)[wave.channels*i + j] - 127)/256.0f;
-            else if (wave.sampleSize == 16) samples[wave.channels*i + j] = (float)((short *)wave.data)[wave.channels*i + j]/32767.0f;
-            else if (wave.sampleSize == 32) samples[wave.channels*i + j] = ((float *)wave.data)[wave.channels*i + j];
-        }
+            if (wave.sampleSize == 8) samples[i] = (float)(((unsigned char *)wave.data)[i] - 127)/256.0f;
+            else if (wave.sampleSize == 16) samples[i] = (float)(((short *)wave.data)[i])/32767.0f;
+            else if (wave.sampleSize == 32) samples[i] = ((float *)wave.data)[i];
     }
 
     return samples;
+}
+
+// Unload samples data loaded with LoadWaveSamples()
+void UnloadWaveSamples(float *samples)
+{
+    RL_FREE(samples);
 }
 
 //----------------------------------------------------------------------------------
@@ -1140,6 +1153,8 @@ Music LoadMusicStream(const char *fileName)
 
             // OGG bit rate defaults to 16 bit, it's enough for compressed format
             music.stream = InitAudioStream(info.sample_rate, 16, info.channels);
+
+            // WARNING: It seems this function returns length in frames, not samples, so we multiply by channels
             music.sampleCount = (unsigned int)stb_vorbis_stream_length_in_samples((stb_vorbis *)music.ctxData)*info.channels;
             music.looping = true;   // Looping enabled by default
             musicLoaded = true;
@@ -1157,7 +1172,7 @@ Music LoadMusicStream(const char *fileName)
             drflac *ctxFlac = (drflac *)music.ctxData;
 
             music.stream = InitAudioStream(ctxFlac->sampleRate, ctxFlac->bitsPerSample, ctxFlac->channels);
-            music.sampleCount = (unsigned int)ctxFlac->totalPCMFrameCount;
+            music.sampleCount = (unsigned int)ctxFlac->totalPCMFrameCount*ctxFlac->channels;
             music.looping = true;   // Looping enabled by default
             musicLoaded = true;
         }
@@ -1196,7 +1211,7 @@ Music LoadMusicStream(const char *fileName)
 
             // NOTE: Only stereo is supported for XM
             music.stream = InitAudioStream(48000, 16, 2);
-            music.sampleCount = (unsigned int)jar_xm_get_remaining_samples(ctxXm)*2;
+            music.sampleCount = (unsigned int)jar_xm_get_remaining_samples(ctxXm)*2;    // 2 channels
             music.looping = true;   // Looping enabled by default
             jar_xm_reset(ctxXm);   // make sure we start at the beginning of the song
             musicLoaded = true;
@@ -1219,7 +1234,7 @@ Music LoadMusicStream(const char *fileName)
 
             // NOTE: Only stereo is supported for MOD
             music.stream = InitAudioStream(48000, 16, 2);
-            music.sampleCount = (unsigned int)jar_mod_max_samples(ctxMod)*2;
+            music.sampleCount = (unsigned int)jar_mod_max_samples(ctxMod)*2;    // 2 channels
             music.looping = true;   // Looping enabled by default
             musicLoaded = true;
 
@@ -1471,7 +1486,7 @@ void SetMusicVolume(Music music, float volume)
 // Set pitch for music
 void SetMusicPitch(Music music, float pitch)
 {
-    SetAudioStreamPitch(music.stream, pitch);
+    SetAudioBufferPitch(music.stream.buffer, pitch);
 }
 
 // Get music time length (in seconds)
@@ -1493,7 +1508,7 @@ float GetMusicTimePlayed(Music music)
     {
         //ma_uint32 frameSizeInBytes = ma_get_bytes_per_sample(music.stream.buffer->dsp.formatConverterIn.config.formatIn)*music.stream.buffer->dsp.formatConverterIn.config.channels;
         unsigned int samplesPlayed = music.stream.buffer->totalFramesProcessed*music.stream.channels;
-        secondsPlayed = (float)samplesPlayed / (music.stream.sampleRate*music.stream.channels);
+        secondsPlayed = (float)samplesPlayed/(music.stream.sampleRate*music.stream.channels);
     }
 
     return secondsPlayed;
@@ -1923,7 +1938,7 @@ static Wave LoadWAV(const unsigned char *fileData, unsigned int fileSize)
 
     if (success)
     {
-        wave.sampleCount = wav.totalPCMFrameCount*wav.channels;
+        wave.sampleCount = (unsigned int)wav.totalPCMFrameCount*wav.channels;
         wave.sampleRate = wav.sampleRate;
         wave.sampleSize = 16;   // NOTE: We are forcing conversion to 16bit
         wave.channels = wav.channels;
@@ -1941,6 +1956,8 @@ static Wave LoadWAV(const unsigned char *fileData, unsigned int fileSize)
 // NOTE: Using dr_wav library
 static int SaveWAV(Wave wave, const char *fileName)
 {
+    int success = false;
+
     drwav wav = { 0 };
     drwav_data_format format = { 0 };
     format.container = drwav_container_riff;
@@ -1949,16 +1966,17 @@ static int SaveWAV(Wave wave, const char *fileName)
     format.sampleRate = wave.sampleRate;
     format.bitsPerSample = wave.sampleSize;
 
-    unsigned char *fileData = NULL;
-    unsigned int fileDataSize = 0;
-    drwav_init_memory_write(&wav, &fileData, &fileDataSize, &format, NULL);
-    drwav_write_pcm_frames(&wav, wave.sampleCount/wave.channels, wave.data);
-    drwav_uninit(&wav);
+    void *fileData = NULL;
+    size_t fileDataSize = 0;
+    success = drwav_init_memory_write(&wav, &fileData, &fileDataSize, &format, NULL);
+    if (success) success = (int)drwav_write_pcm_frames(&wav, wave.sampleCount/wave.channels, wave.data);
+    drwav_result result = drwav_uninit(&wav);
 
-    SaveFileData(fileName, fileData, fileDataSize);
+    if (result == DRWAV_SUCCESS) success = SaveFileData(fileName, (unsigned char *)fileData, (unsigned int)fileDataSize);
+
     drwav_free(fileData, NULL);
 
-    return true;
+    return success;
 }
 #endif
 
@@ -1983,10 +2001,10 @@ static Wave LoadOGG(const unsigned char *fileData, unsigned int fileSize)
         float totalSeconds = stb_vorbis_stream_length_in_seconds(oggData);
         if (totalSeconds > 10) TRACELOG(LOG_WARNING, "WAVE: OGG audio length larger than 10 seconds (%f sec.), that's a big file in memory, consider music streaming", totalSeconds);
 
-        wave.data = (short *)RL_MALLOC(wave.sampleCount*wave.channels*sizeof(short));
+        wave.data = (short *)RL_MALLOC(wave.sampleCount*sizeof(short));
 
         // NOTE: Returns the number of samples to process (be careful! we ask for number of shorts!)
-        stb_vorbis_get_samples_short_interleaved(oggData, info.channels, (short *)wave.data, wave.sampleCount*wave.channels);
+        stb_vorbis_get_samples_short_interleaved(oggData, info.channels, (short *)wave.data, wave.sampleCount);
         TRACELOG(LOG_INFO, "WAVE: OGG data loaded successfully (%i Hz, %i bit, %s)", wave.sampleRate, wave.sampleSize, (wave.channels == 1)? "Mono" : "Stereo");
 
         stb_vorbis_close(oggData);
@@ -2005,12 +2023,12 @@ static Wave LoadFLAC(const unsigned char *fileData, unsigned int fileSize)
     Wave wave = { 0 };
 
     // Decode the entire FLAC file in one go
-    unsigned long long int totalSampleCount = 0;
-    wave.data = drflac_open_memory_and_read_pcm_frames_s16(fileData, fileSize, &wave.channels, &wave.sampleRate, &totalSampleCount, NULL);
+    unsigned long long int totalFrameCount = 0;
+    wave.data = drflac_open_memory_and_read_pcm_frames_s16(fileData, fileSize, &wave.channels, &wave.sampleRate, &totalFrameCount, NULL);
 
     if (wave.data != NULL)
     {
-        wave.sampleCount = (unsigned int)totalSampleCount;
+        wave.sampleCount = (unsigned int)totalFrameCount*wave.channels;
         wave.sampleSize = 16;
 
         TRACELOG(LOG_INFO, "WAVE: FLAC data loaded successfully (%i Hz, %i bit, %s)", wave.sampleRate, wave.sampleSize, (wave.channels == 1)? "Mono" : "Stereo");
@@ -2109,7 +2127,7 @@ static unsigned char *LoadFileData(const char *fileName, unsigned int *bytesRead
 }
 
 // Save data to file from buffer
-static void SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite)
+static bool SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite)
 {
     if (fileName != NULL)
     {
@@ -2131,7 +2149,7 @@ static void SaveFileData(const char *fileName, void *data, unsigned int bytesToW
 }
 
 // Save text data to file (write), string must be '\0' terminated
-static void SaveFileText(const char *fileName, char *text)
+static bool SaveFileText(const char *fileName, char *text)
 {
     if (fileName != NULL)
     {

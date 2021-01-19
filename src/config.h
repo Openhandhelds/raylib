@@ -6,7 +6,7 @@
 *
 *   LICENSE: zlib/libpng
 *
-*   Copyright (c) 2018-2020 Ahmad Fatoum & Ramon Santamaria (@raysan5)
+*   Copyright (c) 2018-2021 Ahmad Fatoum & Ramon Santamaria (@raysan5)
 *
 *   This software is provided "as-is", without any express or implied warranty. In no event
 *   will the authors be held liable for any damages arising from the use of this software.
@@ -25,11 +25,11 @@
 *
 **********************************************************************************************/
 
-#define RAYLIB_VERSION  "3.1-dev"
+#define RAYLIB_VERSION  "3.5"
 
 // Edit to control what features Makefile'd raylib is compiled with
 #if defined(RAYLIB_CMAKE)
-    // Edit CMakeOptions.txt for CMake instead
+    // Edit cmake/RaylibOptions.cmake for CMake instead
     #include "cmake/config.h"
 #else
 
@@ -55,13 +55,11 @@
 // Allow automatic screen capture of current screen pressing F12, defined in KeyCallback()
 #define SUPPORT_SCREEN_CAPTURE      1
 // Allow automatic gif recording of current screen pressing CTRL+F12, defined in KeyCallback()
-//#define SUPPORT_GIF_RECORDING       1
-// Allow scale all the drawn content to match the high-DPI equivalent size (only PLATFORM_DESKTOP)
-//#define SUPPORT_HIGH_DPI            1
+#define SUPPORT_GIF_RECORDING       1
 // Support CompressData() and DecompressData() functions
-#define SUPPORT_COMPRESSION_API       1
+#define SUPPORT_COMPRESSION_API     1
 // Support saving binary data automatically to a generated storage.data file. This file is managed internally.
-#define SUPPORT_DATA_STORAGE          1
+#define SUPPORT_DATA_STORAGE        1
 
 // core: Configuration values
 //------------------------------------------------------------------------------------
@@ -78,6 +76,8 @@
 #define MAX_KEY_PRESSED_QUEUE         16        // Max number of characters in the key input queue
 
 #define STORAGE_DATA_FILE  "storage.data"       // Automatic storage filename
+
+#define MAX_DECOMPRESSION_SIZE        64        // Max size allocated for decompression in MB
 
 
 //------------------------------------------------------------------------------------
@@ -129,17 +129,17 @@
 //------------------------------------------------------------------------------------
 // Selecte desired fileformats to be supported for image data loading
 #define SUPPORT_FILEFORMAT_PNG      1
-#define SUPPORT_FILEFORMAT_BMP      1
-#define SUPPORT_FILEFORMAT_TGA      1
-//#define SUPPORT_FILEFORMAT_JPG    1
+//#define SUPPORT_FILEFORMAT_BMP      1
+//#define SUPPORT_FILEFORMAT_TGA      1
+//#define SUPPORT_FILEFORMAT_JPG      1
 #define SUPPORT_FILEFORMAT_GIF      1
-//#define SUPPORT_FILEFORMAT_PSD    1
+//#define SUPPORT_FILEFORMAT_PSD      1
 #define SUPPORT_FILEFORMAT_DDS      1
 #define SUPPORT_FILEFORMAT_HDR      1
-#define SUPPORT_FILEFORMAT_KTX      1
-#define SUPPORT_FILEFORMAT_ASTC     1
-//#define SUPPORT_FILEFORMAT_PKM    1
-//#define SUPPORT_FILEFORMAT_PVR    1
+//#define SUPPORT_FILEFORMAT_KTX      1
+//#define SUPPORT_FILEFORMAT_ASTC     1
+//#define SUPPORT_FILEFORMAT_PKM      1
+//#define SUPPORT_FILEFORMAT_PVR      1
 
 // Support image export functionality (.png, .bmp, .tga, .jpg)
 #define SUPPORT_IMAGE_EXPORT        1
@@ -192,9 +192,9 @@
 #define SUPPORT_FILEFORMAT_WAV      1
 #define SUPPORT_FILEFORMAT_OGG      1
 #define SUPPORT_FILEFORMAT_XM       1
-#define SUPPORT_FILEFORMAT_MOD      1
-//#define SUPPORT_FILEFORMAT_FLAC     1
+//#define SUPPORT_FILEFORMAT_MOD      1
 #define SUPPORT_FILEFORMAT_MP3      1
+//#define SUPPORT_FILEFORMAT_FLAC     1
 
 // audio: Configuration values
 //------------------------------------------------------------------------------------

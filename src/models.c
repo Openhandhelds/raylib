@@ -17,7 +17,7 @@
 *
 *   LICENSE: zlib/libpng
 *
-*   Copyright (c) 2013-2020 Ramon Santamaria (@raysan5)
+*   Copyright (c) 2013-2021 Ramon Santamaria (@raysan5)
 *
 *   This software is provided "as-is", without any express or implied warranty. In no event
 *   will the authors be held liable for any damages arising from the use of this software.
@@ -657,7 +657,7 @@ void DrawGrid(int slices, float spacing)
 {
     int halfSlices = slices/2;
 
-    if (rlCheckBufferLimit(slices*4)) rlglDraw();
+    if (rlCheckBufferLimit((slices + 2)*4)) rlglDraw();
 
     rlBegin(RL_LINES);
         for (int i = -halfSlices; i <= halfSlices; i++)
@@ -782,16 +782,25 @@ Model LoadModelFromMesh(Mesh mesh)
     return model;
 }
 
-// Unload model from memory (RAM and/or VRAM)
+// Unload model (meshes/materials) from memory (RAM and/or VRAM)
+// NOTE: This function takes care of all model elements, for a detailed control
+// over them, use UnloadMesh() and UnloadMaterial()
 void UnloadModel(Model model)
 {
+    // Unload meshes
     for (int i = 0; i < model.meshCount; i++) UnloadMesh(model.meshes[i]);
 
-    // As the user could be sharing shaders and textures between models,
-    // we don't unload the material but just free it's maps, the user
-    // is responsible for freeing models shaders and textures
-    for (int i = 0; i < model.materialCount; i++) RL_FREE(model.materials[i].maps);
+    // Unload materials maps  and params
+    // NOTE: As the user could be sharing shaders and textures between models,
+    // we don't unload the material but just free it's maps and params,
+    // the user is responsible for freeing models shaders and textures
+    for (int i = 0; i < model.materialCount; i++)
+    {
+        RL_FREE(model.materials[i].maps);
+        RL_FREE(model.materials[i].params);
+    }
 
+    // Unload arrays
     RL_FREE(model.meshes);
     RL_FREE(model.materials);
     RL_FREE(model.meshMaterial);
@@ -800,7 +809,32 @@ void UnloadModel(Model model)
     RL_FREE(model.bones);
     RL_FREE(model.bindPose);
 
-    TRACELOG(LOG_INFO, "MODEL: Unloaded model from RAM and VRAM");
+    TRACELOG(LOG_INFO, "MODEL: Unloaded model (and meshes) from RAM and VRAM");
+}
+
+// Unload model (but not meshes) from memory (RAM and/or VRAM)
+void UnloadModelKeepMeshes(Model model)
+{
+    // Unload materials maps  and params
+    // NOTE: As the user could be sharing shaders and textures between models,
+    // we don't unload the material but just free it's maps and params,
+    // the user is responsible for freeing models shaders and textures
+    for (int i = 0; i < model.materialCount; i++)
+    {
+        RL_FREE(model.materials[i].maps);
+        RL_FREE(model.materials[i].params);
+    }
+
+    // Unload arrays
+    RL_FREE(model.meshes);
+    RL_FREE(model.materials);
+    RL_FREE(model.meshMaterial);
+
+    // Unload animation data
+    RL_FREE(model.bones);
+    RL_FREE(model.bindPose);
+
+    TRACELOG(LOG_INFO, "MODEL: Unloaded model (but not meshes) from RAM and VRAM");
 }
 
 // Load meshes from model file
@@ -823,15 +857,17 @@ void UnloadMesh(Mesh mesh)
 }
 
 // Export mesh data to file
-void ExportMesh(Mesh mesh, const char *fileName)
+bool ExportMesh(Mesh mesh, const char *fileName)
 {
+    bool success = false;
+
     if (IsFileExtension(fileName, ".obj"))
     {
         // Estimated data size, it should be enough...
-        int dataSize = mesh.vertexCount/3*strlen("v 0000.00f 0000.00f 0000.00f") +
-                       mesh.vertexCount/2*strlen("vt 0.000f 0.00f") +
-                       mesh.vertexCount/3*strlen("vn 0.000f 0.00f 0.00f") +
-                       mesh.triangleCount/3*strlen("f 00000/00000/00000 00000/00000/00000 00000/00000/00000");
+        int dataSize = mesh.vertexCount/3* (int)strlen("v 0000.00f 0000.00f 0000.00f") +
+                       mesh.vertexCount/2* (int)strlen("vt 0.000f 0.00f") +
+                       mesh.vertexCount/3* (int)strlen("vn 0.000f 0.00f 0.00f") +
+                       mesh.triangleCount/3* (int)strlen("f 00000/00000/00000 00000/00000/00000 00000/00000/00000");
 
         // NOTE: Text data buffer size is estimated considering mesh data size
         char *txtData = (char *)RL_CALLOC(dataSize + 2000, sizeof(char));
@@ -875,7 +911,7 @@ void ExportMesh(Mesh mesh, const char *fileName)
         bytesCount += sprintf(txtData + bytesCount, "\n");
 
         // NOTE: Text data length exported is determined by '\0' (NULL) character
-        SaveFileText(fileName, txtData);
+        success = SaveFileText(fileName, txtData);
 
         RL_FREE(txtData);
     }
@@ -883,6 +919,8 @@ void ExportMesh(Mesh mesh, const char *fileName)
     {
         // TODO: Support additional file formats to export mesh vertex data
     }
+
+    return success;
 }
 
 // Load materials from model file
@@ -898,7 +936,7 @@ Material *LoadMaterials(const char *fileName, int *materialCount)
     {
         tinyobj_material_t *mats = NULL;
 
-        int result = tinyobj_parse_mtl_file(&mats, &count, fileName, NULL, NULL);
+        int result = tinyobj_parse_mtl_file(&mats, &count, fileName);
         if (result != TINYOBJ_SUCCESS) TRACELOG(LOG_WARNING, "MATERIAL: [%s] Failed to parse materials file", fileName);
 
         // TODO: Process materials to return
@@ -910,7 +948,10 @@ Material *LoadMaterials(const char *fileName, int *materialCount)
 #endif
 
     // Set materials shader to default (DIFFUSE, SPECULAR, NORMAL)
-    for (unsigned int i = 0; i < count; i++) materials[i].shader = GetShaderDefault();
+    if (materials != NULL)
+    {
+        for (unsigned int i = 0; i < count; i++) materials[i].shader = GetShaderDefault();
+    }
 
     *materialCount = count;
     return materials;
@@ -946,6 +987,7 @@ void UnloadMaterial(Material material)
     }
 
     RL_FREE(material.maps);
+    RL_FREE(material.params);
 }
 
 // Set texture for a material map type (MAP_DIFFUSE, MAP_SPECULAR...)
@@ -1271,9 +1313,10 @@ bool IsModelAnimationValid(Model model, ModelAnimation anim)
 Mesh GenMeshPoly(int sides, float radius)
 {
     Mesh mesh = { 0 };
-    mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
     if (sides < 3) return mesh;
+
+    mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
     int vertexCount = sides*3;
 
@@ -1443,7 +1486,6 @@ Mesh GenMeshPlane(float width, float length, int resX, int resZ)
     mesh.vertices = (float *)RL_MALLOC(plane->ntriangles*3*3*sizeof(float));
     mesh.texcoords = (float *)RL_MALLOC(plane->ntriangles*3*2*sizeof(float));
     mesh.normals = (float *)RL_MALLOC(plane->ntriangles*3*3*sizeof(float));
-    mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
     mesh.vertexCount = plane->ntriangles*3;
     mesh.triangleCount = plane->ntriangles;
@@ -1641,37 +1683,42 @@ par_shapes_mesh* par_shapes_create_icosahedron();       // 20 sides polyhedron
 RLAPI Mesh GenMeshSphere(float radius, int rings, int slices)
 {
     Mesh mesh = { 0 };
-    mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
-    par_shapes_mesh *sphere = par_shapes_create_parametric_sphere(slices, rings);
-    par_shapes_scale(sphere, radius, radius, radius);
-    // NOTE: Soft normals are computed internally
-
-    mesh.vertices = (float *)RL_MALLOC(sphere->ntriangles*3*3*sizeof(float));
-    mesh.texcoords = (float *)RL_MALLOC(sphere->ntriangles*3*2*sizeof(float));
-    mesh.normals = (float *)RL_MALLOC(sphere->ntriangles*3*3*sizeof(float));
-
-    mesh.vertexCount = sphere->ntriangles*3;
-    mesh.triangleCount = sphere->ntriangles;
-
-    for (int k = 0; k < mesh.vertexCount; k++)
+    if ((rings >= 3) && (slices >= 3))
     {
-        mesh.vertices[k*3] = sphere->points[sphere->triangles[k]*3];
-        mesh.vertices[k*3 + 1] = sphere->points[sphere->triangles[k]*3 + 1];
-        mesh.vertices[k*3 + 2] = sphere->points[sphere->triangles[k]*3 + 2];
+        mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
-        mesh.normals[k*3] = sphere->normals[sphere->triangles[k]*3];
-        mesh.normals[k*3 + 1] = sphere->normals[sphere->triangles[k]*3 + 1];
-        mesh.normals[k*3 + 2] = sphere->normals[sphere->triangles[k]*3 + 2];
+        par_shapes_mesh *sphere = par_shapes_create_parametric_sphere(slices, rings);
+        par_shapes_scale(sphere, radius, radius, radius);
+        // NOTE: Soft normals are computed internally
 
-        mesh.texcoords[k*2] = sphere->tcoords[sphere->triangles[k]*2];
-        mesh.texcoords[k*2 + 1] = sphere->tcoords[sphere->triangles[k]*2 + 1];
+        mesh.vertices = (float *)RL_MALLOC(sphere->ntriangles*3*3*sizeof(float));
+        mesh.texcoords = (float *)RL_MALLOC(sphere->ntriangles*3*2*sizeof(float));
+        mesh.normals = (float *)RL_MALLOC(sphere->ntriangles*3*3*sizeof(float));
+
+        mesh.vertexCount = sphere->ntriangles*3;
+        mesh.triangleCount = sphere->ntriangles;
+
+        for (int k = 0; k < mesh.vertexCount; k++)
+        {
+            mesh.vertices[k*3] = sphere->points[sphere->triangles[k]*3];
+            mesh.vertices[k*3 + 1] = sphere->points[sphere->triangles[k]*3 + 1];
+            mesh.vertices[k*3 + 2] = sphere->points[sphere->triangles[k]*3 + 2];
+
+            mesh.normals[k*3] = sphere->normals[sphere->triangles[k]*3];
+            mesh.normals[k*3 + 1] = sphere->normals[sphere->triangles[k]*3 + 1];
+            mesh.normals[k*3 + 2] = sphere->normals[sphere->triangles[k]*3 + 2];
+
+            mesh.texcoords[k*2] = sphere->tcoords[sphere->triangles[k]*2];
+            mesh.texcoords[k*2 + 1] = sphere->tcoords[sphere->triangles[k]*2 + 1];
+        }
+
+        par_shapes_free_mesh(sphere);
+
+        // Upload vertex data to GPU (static mesh)
+        rlLoadMesh(&mesh, false);
     }
-
-    par_shapes_free_mesh(sphere);
-
-    // Upload vertex data to GPU (static mesh)
-    rlLoadMesh(&mesh, false);
+    else TRACELOG(LOG_WARNING, "MESH: Failed to generate mesh: sphere");
 
     return mesh;
 }
@@ -1680,37 +1727,44 @@ RLAPI Mesh GenMeshSphere(float radius, int rings, int slices)
 RLAPI Mesh GenMeshHemiSphere(float radius, int rings, int slices)
 {
     Mesh mesh = { 0 };
-    mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
-    par_shapes_mesh *sphere = par_shapes_create_hemisphere(slices, rings);
-    par_shapes_scale(sphere, radius, radius, radius);
-    // NOTE: Soft normals are computed internally
-
-    mesh.vertices = (float *)RL_MALLOC(sphere->ntriangles*3*3*sizeof(float));
-    mesh.texcoords = (float *)RL_MALLOC(sphere->ntriangles*3*2*sizeof(float));
-    mesh.normals = (float *)RL_MALLOC(sphere->ntriangles*3*3*sizeof(float));
-
-    mesh.vertexCount = sphere->ntriangles*3;
-    mesh.triangleCount = sphere->ntriangles;
-
-    for (int k = 0; k < mesh.vertexCount; k++)
+    if ((rings >= 3) && (slices >= 3))
     {
-        mesh.vertices[k*3] = sphere->points[sphere->triangles[k]*3];
-        mesh.vertices[k*3 + 1] = sphere->points[sphere->triangles[k]*3 + 1];
-        mesh.vertices[k*3 + 2] = sphere->points[sphere->triangles[k]*3 + 2];
+        if (radius < 0.0f) radius = 0.0f;
 
-        mesh.normals[k*3] = sphere->normals[sphere->triangles[k]*3];
-        mesh.normals[k*3 + 1] = sphere->normals[sphere->triangles[k]*3 + 1];
-        mesh.normals[k*3 + 2] = sphere->normals[sphere->triangles[k]*3 + 2];
+        mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
-        mesh.texcoords[k*2] = sphere->tcoords[sphere->triangles[k]*2];
-        mesh.texcoords[k*2 + 1] = sphere->tcoords[sphere->triangles[k]*2 + 1];
+        par_shapes_mesh *sphere = par_shapes_create_hemisphere(slices, rings);
+        par_shapes_scale(sphere, radius, radius, radius);
+        // NOTE: Soft normals are computed internally
+
+        mesh.vertices = (float *)RL_MALLOC(sphere->ntriangles*3*3*sizeof(float));
+        mesh.texcoords = (float *)RL_MALLOC(sphere->ntriangles*3*2*sizeof(float));
+        mesh.normals = (float *)RL_MALLOC(sphere->ntriangles*3*3*sizeof(float));
+
+        mesh.vertexCount = sphere->ntriangles*3;
+        mesh.triangleCount = sphere->ntriangles;
+
+        for (int k = 0; k < mesh.vertexCount; k++)
+        {
+            mesh.vertices[k*3] = sphere->points[sphere->triangles[k]*3];
+            mesh.vertices[k*3 + 1] = sphere->points[sphere->triangles[k]*3 + 1];
+            mesh.vertices[k*3 + 2] = sphere->points[sphere->triangles[k]*3 + 2];
+
+            mesh.normals[k*3] = sphere->normals[sphere->triangles[k]*3];
+            mesh.normals[k*3 + 1] = sphere->normals[sphere->triangles[k]*3 + 1];
+            mesh.normals[k*3 + 2] = sphere->normals[sphere->triangles[k]*3 + 2];
+
+            mesh.texcoords[k*2] = sphere->tcoords[sphere->triangles[k]*2];
+            mesh.texcoords[k*2 + 1] = sphere->tcoords[sphere->triangles[k]*2 + 1];
+        }
+
+        par_shapes_free_mesh(sphere);
+
+        // Upload vertex data to GPU (static mesh)
+        rlLoadMesh(&mesh, false);
     }
-
-    par_shapes_free_mesh(sphere);
-
-    // Upload vertex data to GPU (static mesh)
-    rlLoadMesh(&mesh, false);
+    else TRACELOG(LOG_WARNING, "MESH: Failed to generate mesh: hemisphere");
 
     return mesh;
 }
@@ -1719,58 +1773,63 @@ RLAPI Mesh GenMeshHemiSphere(float radius, int rings, int slices)
 Mesh GenMeshCylinder(float radius, float height, int slices)
 {
     Mesh mesh = { 0 };
-    mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
-    // Instance a cylinder that sits on the Z=0 plane using the given tessellation
-    // levels across the UV domain.  Think of "slices" like a number of pizza
-    // slices, and "stacks" like a number of stacked rings.
-    // Height and radius are both 1.0, but they can easily be changed with par_shapes_scale
-    par_shapes_mesh *cylinder = par_shapes_create_cylinder(slices, 8);
-    par_shapes_scale(cylinder, radius, radius, height);
-    par_shapes_rotate(cylinder, -PI/2.0f, (float[]){ 1, 0, 0 });
-    par_shapes_rotate(cylinder, PI/2.0f, (float[]){ 0, 1, 0 });
-
-    // Generate an orientable disk shape (top cap)
-    par_shapes_mesh *capTop = par_shapes_create_disk(radius, slices, (float[]){ 0, 0, 0 }, (float[]){ 0, 0, 1 });
-    capTop->tcoords = PAR_MALLOC(float, 2*capTop->npoints);
-    for (int i = 0; i < 2*capTop->npoints; i++) capTop->tcoords[i] = 0.0f;
-    par_shapes_rotate(capTop, -PI/2.0f, (float[]){ 1, 0, 0 });
-    par_shapes_translate(capTop, 0, height, 0);
-
-    // Generate an orientable disk shape (bottom cap)
-    par_shapes_mesh *capBottom = par_shapes_create_disk(radius, slices, (float[]){ 0, 0, 0 }, (float[]){ 0, 0, -1 });
-    capBottom->tcoords = PAR_MALLOC(float, 2*capBottom->npoints);
-    for (int i = 0; i < 2*capBottom->npoints; i++) capBottom->tcoords[i] = 0.95f;
-    par_shapes_rotate(capBottom, PI/2.0f, (float[]){ 1, 0, 0 });
-
-    par_shapes_merge_and_free(cylinder, capTop);
-    par_shapes_merge_and_free(cylinder, capBottom);
-
-    mesh.vertices = (float *)RL_MALLOC(cylinder->ntriangles*3*3*sizeof(float));
-    mesh.texcoords = (float *)RL_MALLOC(cylinder->ntriangles*3*2*sizeof(float));
-    mesh.normals = (float *)RL_MALLOC(cylinder->ntriangles*3*3*sizeof(float));
-
-    mesh.vertexCount = cylinder->ntriangles*3;
-    mesh.triangleCount = cylinder->ntriangles;
-
-    for (int k = 0; k < mesh.vertexCount; k++)
+    if (slices >= 3)
     {
-        mesh.vertices[k*3] = cylinder->points[cylinder->triangles[k]*3];
-        mesh.vertices[k*3 + 1] = cylinder->points[cylinder->triangles[k]*3 + 1];
-        mesh.vertices[k*3 + 2] = cylinder->points[cylinder->triangles[k]*3 + 2];
+        mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
-        mesh.normals[k*3] = cylinder->normals[cylinder->triangles[k]*3];
-        mesh.normals[k*3 + 1] = cylinder->normals[cylinder->triangles[k]*3 + 1];
-        mesh.normals[k*3 + 2] = cylinder->normals[cylinder->triangles[k]*3 + 2];
+        // Instance a cylinder that sits on the Z=0 plane using the given tessellation
+        // levels across the UV domain.  Think of "slices" like a number of pizza
+        // slices, and "stacks" like a number of stacked rings.
+        // Height and radius are both 1.0, but they can easily be changed with par_shapes_scale
+        par_shapes_mesh *cylinder = par_shapes_create_cylinder(slices, 8);
+        par_shapes_scale(cylinder, radius, radius, height);
+        par_shapes_rotate(cylinder, -PI/2.0f, (float[]){ 1, 0, 0 });
+        par_shapes_rotate(cylinder, PI/2.0f, (float[]){ 0, 1, 0 });
 
-        mesh.texcoords[k*2] = cylinder->tcoords[cylinder->triangles[k]*2];
-        mesh.texcoords[k*2 + 1] = cylinder->tcoords[cylinder->triangles[k]*2 + 1];
+        // Generate an orientable disk shape (top cap)
+        par_shapes_mesh *capTop = par_shapes_create_disk(radius, slices, (float[]){ 0, 0, 0 }, (float[]){ 0, 0, 1 });
+        capTop->tcoords = PAR_MALLOC(float, 2*capTop->npoints);
+        for (int i = 0; i < 2*capTop->npoints; i++) capTop->tcoords[i] = 0.0f;
+        par_shapes_rotate(capTop, -PI/2.0f, (float[]){ 1, 0, 0 });
+        par_shapes_translate(capTop, 0, height, 0);
+
+        // Generate an orientable disk shape (bottom cap)
+        par_shapes_mesh *capBottom = par_shapes_create_disk(radius, slices, (float[]){ 0, 0, 0 }, (float[]){ 0, 0, -1 });
+        capBottom->tcoords = PAR_MALLOC(float, 2*capBottom->npoints);
+        for (int i = 0; i < 2*capBottom->npoints; i++) capBottom->tcoords[i] = 0.95f;
+        par_shapes_rotate(capBottom, PI/2.0f, (float[]){ 1, 0, 0 });
+
+        par_shapes_merge_and_free(cylinder, capTop);
+        par_shapes_merge_and_free(cylinder, capBottom);
+
+        mesh.vertices = (float *)RL_MALLOC(cylinder->ntriangles*3*3*sizeof(float));
+        mesh.texcoords = (float *)RL_MALLOC(cylinder->ntriangles*3*2*sizeof(float));
+        mesh.normals = (float *)RL_MALLOC(cylinder->ntriangles*3*3*sizeof(float));
+
+        mesh.vertexCount = cylinder->ntriangles*3;
+        mesh.triangleCount = cylinder->ntriangles;
+
+        for (int k = 0; k < mesh.vertexCount; k++)
+        {
+            mesh.vertices[k*3] = cylinder->points[cylinder->triangles[k]*3];
+            mesh.vertices[k*3 + 1] = cylinder->points[cylinder->triangles[k]*3 + 1];
+            mesh.vertices[k*3 + 2] = cylinder->points[cylinder->triangles[k]*3 + 2];
+
+            mesh.normals[k*3] = cylinder->normals[cylinder->triangles[k]*3];
+            mesh.normals[k*3 + 1] = cylinder->normals[cylinder->triangles[k]*3 + 1];
+            mesh.normals[k*3 + 2] = cylinder->normals[cylinder->triangles[k]*3 + 2];
+
+            mesh.texcoords[k*2] = cylinder->tcoords[cylinder->triangles[k]*2];
+            mesh.texcoords[k*2 + 1] = cylinder->tcoords[cylinder->triangles[k]*2 + 1];
+        }
+
+        par_shapes_free_mesh(cylinder);
+
+        // Upload vertex data to GPU (static mesh)
+        rlLoadMesh(&mesh, false);
     }
-
-    par_shapes_free_mesh(cylinder);
-
-    // Upload vertex data to GPU (static mesh)
-    rlLoadMesh(&mesh, false);
+    else TRACELOG(LOG_WARNING, "MESH: Failed to generate mesh: cylinder");
 
     return mesh;
 }
@@ -1779,41 +1838,46 @@ Mesh GenMeshCylinder(float radius, float height, int slices)
 Mesh GenMeshTorus(float radius, float size, int radSeg, int sides)
 {
     Mesh mesh = { 0 };
-    mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
-    if (radius > 1.0f) radius = 1.0f;
-    else if (radius < 0.1f) radius = 0.1f;
-
-    // Create a donut that sits on the Z=0 plane with the specified inner radius
-    // The outer radius can be controlled with par_shapes_scale
-    par_shapes_mesh *torus = par_shapes_create_torus(radSeg, sides, radius);
-    par_shapes_scale(torus, size/2, size/2, size/2);
-
-    mesh.vertices = (float *)RL_MALLOC(torus->ntriangles*3*3*sizeof(float));
-    mesh.texcoords = (float *)RL_MALLOC(torus->ntriangles*3*2*sizeof(float));
-    mesh.normals = (float *)RL_MALLOC(torus->ntriangles*3*3*sizeof(float));
-
-    mesh.vertexCount = torus->ntriangles*3;
-    mesh.triangleCount = torus->ntriangles;
-
-    for (int k = 0; k < mesh.vertexCount; k++)
+    if ((sides >= 3) && (radSeg >= 3))
     {
-        mesh.vertices[k*3] = torus->points[torus->triangles[k]*3];
-        mesh.vertices[k*3 + 1] = torus->points[torus->triangles[k]*3 + 1];
-        mesh.vertices[k*3 + 2] = torus->points[torus->triangles[k]*3 + 2];
+        mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
-        mesh.normals[k*3] = torus->normals[torus->triangles[k]*3];
-        mesh.normals[k*3 + 1] = torus->normals[torus->triangles[k]*3 + 1];
-        mesh.normals[k*3 + 2] = torus->normals[torus->triangles[k]*3 + 2];
+        if (radius > 1.0f) radius = 1.0f;
+        else if (radius < 0.1f) radius = 0.1f;
 
-        mesh.texcoords[k*2] = torus->tcoords[torus->triangles[k]*2];
-        mesh.texcoords[k*2 + 1] = torus->tcoords[torus->triangles[k]*2 + 1];
+        // Create a donut that sits on the Z=0 plane with the specified inner radius
+        // The outer radius can be controlled with par_shapes_scale
+        par_shapes_mesh *torus = par_shapes_create_torus(radSeg, sides, radius);
+        par_shapes_scale(torus, size/2, size/2, size/2);
+
+        mesh.vertices = (float *)RL_MALLOC(torus->ntriangles*3*3*sizeof(float));
+        mesh.texcoords = (float *)RL_MALLOC(torus->ntriangles*3*2*sizeof(float));
+        mesh.normals = (float *)RL_MALLOC(torus->ntriangles*3*3*sizeof(float));
+
+        mesh.vertexCount = torus->ntriangles*3;
+        mesh.triangleCount = torus->ntriangles;
+
+        for (int k = 0; k < mesh.vertexCount; k++)
+        {
+            mesh.vertices[k*3] = torus->points[torus->triangles[k]*3];
+            mesh.vertices[k*3 + 1] = torus->points[torus->triangles[k]*3 + 1];
+            mesh.vertices[k*3 + 2] = torus->points[torus->triangles[k]*3 + 2];
+
+            mesh.normals[k*3] = torus->normals[torus->triangles[k]*3];
+            mesh.normals[k*3 + 1] = torus->normals[torus->triangles[k]*3 + 1];
+            mesh.normals[k*3 + 2] = torus->normals[torus->triangles[k]*3 + 2];
+
+            mesh.texcoords[k*2] = torus->tcoords[torus->triangles[k]*2];
+            mesh.texcoords[k*2 + 1] = torus->tcoords[torus->triangles[k]*2 + 1];
+        }
+
+        par_shapes_free_mesh(torus);
+
+        // Upload vertex data to GPU (static mesh)
+        rlLoadMesh(&mesh, false);
     }
-
-    par_shapes_free_mesh(torus);
-
-    // Upload vertex data to GPU (static mesh)
-    rlLoadMesh(&mesh, false);
+    else TRACELOG(LOG_WARNING, "MESH: Failed to generate mesh: torus");
 
     return mesh;
 }
@@ -1822,39 +1886,44 @@ Mesh GenMeshTorus(float radius, float size, int radSeg, int sides)
 Mesh GenMeshKnot(float radius, float size, int radSeg, int sides)
 {
     Mesh mesh = { 0 };
-    mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
-    if (radius > 3.0f) radius = 3.0f;
-    else if (radius < 0.5f) radius = 0.5f;
-
-    par_shapes_mesh *knot = par_shapes_create_trefoil_knot(radSeg, sides, radius);
-    par_shapes_scale(knot, size, size, size);
-
-    mesh.vertices = (float *)RL_MALLOC(knot->ntriangles*3*3*sizeof(float));
-    mesh.texcoords = (float *)RL_MALLOC(knot->ntriangles*3*2*sizeof(float));
-    mesh.normals = (float *)RL_MALLOC(knot->ntriangles*3*3*sizeof(float));
-
-    mesh.vertexCount = knot->ntriangles*3;
-    mesh.triangleCount = knot->ntriangles;
-
-    for (int k = 0; k < mesh.vertexCount; k++)
+    if ((sides >= 3) && (radSeg >= 3))
     {
-        mesh.vertices[k*3] = knot->points[knot->triangles[k]*3];
-        mesh.vertices[k*3 + 1] = knot->points[knot->triangles[k]*3 + 1];
-        mesh.vertices[k*3 + 2] = knot->points[knot->triangles[k]*3 + 2];
+        mesh.vboId = (unsigned int *)RL_CALLOC(DEFAULT_MESH_VERTEX_BUFFERS, sizeof(unsigned int));
 
-        mesh.normals[k*3] = knot->normals[knot->triangles[k]*3];
-        mesh.normals[k*3 + 1] = knot->normals[knot->triangles[k]*3 + 1];
-        mesh.normals[k*3 + 2] = knot->normals[knot->triangles[k]*3 + 2];
+        if (radius > 3.0f) radius = 3.0f;
+        else if (radius < 0.5f) radius = 0.5f;
 
-        mesh.texcoords[k*2] = knot->tcoords[knot->triangles[k]*2];
-        mesh.texcoords[k*2 + 1] = knot->tcoords[knot->triangles[k]*2 + 1];
+        par_shapes_mesh *knot = par_shapes_create_trefoil_knot(radSeg, sides, radius);
+        par_shapes_scale(knot, size, size, size);
+
+        mesh.vertices = (float *)RL_MALLOC(knot->ntriangles*3*3*sizeof(float));
+        mesh.texcoords = (float *)RL_MALLOC(knot->ntriangles*3*2*sizeof(float));
+        mesh.normals = (float *)RL_MALLOC(knot->ntriangles*3*3*sizeof(float));
+
+        mesh.vertexCount = knot->ntriangles*3;
+        mesh.triangleCount = knot->ntriangles;
+
+        for (int k = 0; k < mesh.vertexCount; k++)
+        {
+            mesh.vertices[k*3] = knot->points[knot->triangles[k]*3];
+            mesh.vertices[k*3 + 1] = knot->points[knot->triangles[k]*3 + 1];
+            mesh.vertices[k*3 + 2] = knot->points[knot->triangles[k]*3 + 2];
+
+            mesh.normals[k*3] = knot->normals[knot->triangles[k]*3];
+            mesh.normals[k*3 + 1] = knot->normals[knot->triangles[k]*3 + 1];
+            mesh.normals[k*3 + 2] = knot->normals[knot->triangles[k]*3 + 2];
+
+            mesh.texcoords[k*2] = knot->tcoords[knot->triangles[k]*2];
+            mesh.texcoords[k*2 + 1] = knot->tcoords[knot->triangles[k]*2 + 1];
+        }
+
+        par_shapes_free_mesh(knot);
+
+        // Upload vertex data to GPU (static mesh)
+        rlLoadMesh(&mesh, false);
     }
-
-    par_shapes_free_mesh(knot);
-
-    // Upload vertex data to GPU (static mesh)
-    rlLoadMesh(&mesh, false);
+    else TRACELOG(LOG_WARNING, "MESH: Failed to generate mesh: knot");
 
     return mesh;
 }
@@ -2563,13 +2632,6 @@ void DrawModelEx(Model model, Vector3 position, Vector3 rotationAxis, float rota
 
     for (int i = 0; i < model.meshCount; i++)
     {
-        // TODO: Review color + tint premultiplication mechanism
-
-        // (codifies)  Ray not only does this work as expected but
-        // multiplying *is* definately the way to tint
-        // can we call it reviewed ?
-
-        // would you prefer an extra model.tint, that rlDrawMesh uses ?
         Color color = model.materials[model.meshMaterial[i]].maps[MAP_DIFFUSE].color;
 
         Color colorTint = WHITE;
@@ -2607,16 +2669,16 @@ void DrawModelWiresEx(Model model, Vector3 position, Vector3 rotationAxis, float
 // Draw a billboard
 void DrawBillboard(Camera camera, Texture2D texture, Vector3 center, float size, Color tint)
 {
-    Rectangle sourceRec = { 0.0f, 0.0f, (float)texture.width, (float)texture.height };
+    Rectangle source = { 0.0f, 0.0f, (float)texture.width, (float)texture.height };
 
-    DrawBillboardRec(camera, texture, sourceRec, center, size, tint);
+    DrawBillboardRec(camera, texture, source, center, size, tint);
 }
 
 // Draw a billboard (part of a texture defined by a rectangle)
-void DrawBillboardRec(Camera camera, Texture2D texture, Rectangle sourceRec, Vector3 center, float size, Color tint)
+void DrawBillboardRec(Camera camera, Texture2D texture, Rectangle source, Vector3 center, float size, Color tint)
 {
-    // NOTE: Billboard size will maintain sourceRec aspect ratio, size will represent billboard width
-    Vector2 sizeRatio = { size, size*(float)sourceRec.height/sourceRec.width };
+    // NOTE: Billboard size will maintain source rectangle aspect ratio, size will represent billboard width
+    Vector2 sizeRatio = { size, size*(float)source.height/source.width };
 
     Matrix matView = MatrixLookAt(camera.position, camera.target, camera.up);
 
@@ -2651,19 +2713,19 @@ void DrawBillboardRec(Camera camera, Texture2D texture, Rectangle sourceRec, Vec
         rlColor4ub(tint.r, tint.g, tint.b, tint.a);
 
         // Bottom-left corner for texture and quad
-        rlTexCoord2f((float)sourceRec.x/texture.width, (float)sourceRec.y/texture.height);
+        rlTexCoord2f((float)source.x/texture.width, (float)source.y/texture.height);
         rlVertex3f(a.x, a.y, a.z);
 
         // Top-left corner for texture and quad
-        rlTexCoord2f((float)sourceRec.x/texture.width, (float)(sourceRec.y + sourceRec.height)/texture.height);
+        rlTexCoord2f((float)source.x/texture.width, (float)(source.y + source.height)/texture.height);
         rlVertex3f(d.x, d.y, d.z);
 
         // Top-right corner for texture and quad
-        rlTexCoord2f((float)(sourceRec.x + sourceRec.width)/texture.width, (float)(sourceRec.y + sourceRec.height)/texture.height);
+        rlTexCoord2f((float)(source.x + source.width)/texture.width, (float)(source.y + source.height)/texture.height);
         rlVertex3f(c.x, c.y, c.z);
 
         // Bottom-right corner for texture and quad
-        rlTexCoord2f((float)(sourceRec.x + sourceRec.width)/texture.width, (float)sourceRec.y/texture.height);
+        rlTexCoord2f((float)(source.x + source.width)/texture.width, (float)source.y/texture.height);
         rlVertex3f(b.x, b.y, b.z);
     rlEnd();
 
@@ -2685,24 +2747,24 @@ void DrawBoundingBox(BoundingBox box, Color color)
 }
 
 // Detect collision between two spheres
-bool CheckCollisionSpheres(Vector3 centerA, float radiusA, Vector3 centerB, float radiusB)
+bool CheckCollisionSpheres(Vector3 center1, float radius1, Vector3 center2, float radius2)
 {
     bool collision = false;
 
     // Simple way to check for collision, just checking distance between two points
     // Unfortunately, sqrtf() is a costly operation, so we avoid it with following solution
     /*
-    float dx = centerA.x - centerB.x;      // X distance between centers
-    float dy = centerA.y - centerB.y;      // Y distance between centers
-    float dz = centerA.z - centerB.z;      // Z distance between centers
+    float dx = center1.x - center2.x;      // X distance between centers
+    float dy = center1.y - center2.y;      // Y distance between centers
+    float dz = center1.z - center2.z;      // Z distance between centers
 
     float distance = sqrtf(dx*dx + dy*dy + dz*dz);  // Distance between centers
 
-    if (distance <= (radiusA + radiusB)) collision = true;
+    if (distance <= (radius1 + radius2)) collision = true;
     */
 
     // Check for distances squared to avoid sqrtf()
-    if (Vector3DotProduct(Vector3Subtract(centerB, centerA), Vector3Subtract(centerB, centerA)) <= (radiusA + radiusB)*(radiusA + radiusB)) collision = true;
+    if (Vector3DotProduct(Vector3Subtract(center2, center1), Vector3Subtract(center2, center1)) <= (radius1 + radius2)*(radius1 + radius2)) collision = true;
 
     return collision;
 }
@@ -2806,6 +2868,51 @@ bool CheckCollisionRayBox(Ray ray, BoundingBox box)
 
     return collision;
 }
+// Get collision info between ray and mesh
+RayHitInfo GetCollisionRayMesh(Ray ray, Mesh mesh, Matrix transform)
+{
+    RayHitInfo result = { 0 };
+
+    // Check if mesh vertex data on CPU for testing
+    if (mesh.vertices != NULL)
+    {
+        // model->mesh.triangleCount may not be set, vertexCount is more reliable
+        int triangleCount = mesh.vertexCount / 3;
+
+        // Test against all triangles in mesh
+        for (int i = 0; i < triangleCount; i++)
+        {
+            Vector3 a, b, c;
+            Vector3* vertdata = (Vector3*)mesh.vertices;
+
+            if (mesh.indices)
+            {
+                a = vertdata[mesh.indices[i * 3 + 0]];
+                b = vertdata[mesh.indices[i * 3 + 1]];
+                c = vertdata[mesh.indices[i * 3 + 2]];
+            }
+            else
+            {
+                a = vertdata[i * 3 + 0];
+                b = vertdata[i * 3 + 1];
+                c = vertdata[i * 3 + 2];
+            }
+
+            a = Vector3Transform(a, transform);
+            b = Vector3Transform(b, transform);
+            c = Vector3Transform(c, transform);
+
+            RayHitInfo triHitInfo = GetCollisionRayTriangle(ray, a, b, c);
+
+            if (triHitInfo.hit)
+            {
+                // Save the closest hit triangle
+                if ((!result.hit) || (result.distance > triHitInfo.distance)) result = triHitInfo;
+            }
+        }
+    }
+    return result;
+}
 
 // Get collision info between ray and model
 RayHitInfo GetCollisionRayModel(Ray ray, Model model)
@@ -2814,43 +2921,12 @@ RayHitInfo GetCollisionRayModel(Ray ray, Model model)
 
     for (int m = 0; m < model.meshCount; m++)
     {
-        // Check if meshhas vertex data on CPU for testing
-        if (model.meshes[m].vertices != NULL)
+        RayHitInfo meshHitInfo = GetCollisionRayMesh(ray, model.meshes[m], model.transform);
+
+        if (meshHitInfo.hit)
         {
-            // model->mesh.triangleCount may not be set, vertexCount is more reliable
-            int triangleCount = model.meshes[m].vertexCount/3;
-
-            // Test against all triangles in mesh
-            for (int i = 0; i < triangleCount; i++)
-            {
-                Vector3 a, b, c;
-                Vector3 *vertdata = (Vector3 *)model.meshes[m].vertices;
-
-                if (model.meshes[m].indices)
-                {
-                    a = vertdata[model.meshes[m].indices[i*3 + 0]];
-                    b = vertdata[model.meshes[m].indices[i*3 + 1]];
-                    c = vertdata[model.meshes[m].indices[i*3 + 2]];
-                }
-                else
-                {
-                    a = vertdata[i*3 + 0];
-                    b = vertdata[i*3 + 1];
-                    c = vertdata[i*3 + 2];
-                }
-
-                a = Vector3Transform(a, model.transform);
-                b = Vector3Transform(b, model.transform);
-                c = Vector3Transform(c, model.transform);
-
-                RayHitInfo triHitInfo = GetCollisionRayTriangle(ray, a, b, c);
-
-                if (triHitInfo.hit)
-                {
-                    // Save the closest hit triangle
-                    if ((!result.hit) || (result.distance > triHitInfo.distance)) result = triHitInfo;
-                }
-            }
+            // Save the closest hit mesh
+            if ((!result.hit) || (result.distance > meshHitInfo.distance)) result = meshHitInfo;
         }
     }
 
@@ -2946,10 +3022,6 @@ RayHitInfo GetCollisionRayGround(Ray ray, float groundHeight)
 
 #if defined(SUPPORT_FILEFORMAT_OBJ)
 // Load OBJ mesh data
-
-// TODO used by loadOBJ, could change to a function that could handle
-// data coming from a file, memory or archive...
-
 static Model LoadOBJ(const char *fileName)
 {
     Model model = { 0 };
@@ -2961,17 +3033,17 @@ static Model LoadOBJ(const char *fileName)
     tinyobj_material_t *materials = NULL;
     unsigned int materialCount = 0;
 
-    //char *fileData = LoadFileText(fileName);
+    char *fileData = LoadFileText(fileName);
 
-    //if (fileData != NULL)
+    if (fileData != NULL)
     {
-        //unsigned int dataSize = (unsigned int)strlen(fileData);
+        unsigned int dataSize = (unsigned int)strlen(fileData);
         char currentDir[1024] = { 0 };
         strcpy(currentDir, GetWorkingDirectory());
         chdir(GetDirectoryPath(fileName));
 
         unsigned int flags = TINYOBJ_FLAG_TRIANGULATE;
-        int ret = tinyobj_parse_obj(&attrib, &meshes, &meshCount, &materials, &materialCount, fileName, NULL, flags);
+        int ret = tinyobj_parse_obj(&attrib, &meshes, &meshCount, &materials, &materialCount, fileData, dataSize, flags);
 
         if (ret != TINYOBJ_SUCCESS) TRACELOG(LOG_WARNING, "MODEL: [%s] Failed to load OBJ data", fileName);
         else TRACELOG(LOG_INFO, "MODEL: [%s] OBJ data loaded successfully: %i meshes / %i materials", fileName, meshCount, materialCount);
@@ -2984,7 +3056,7 @@ static Model LoadOBJ(const char *fileName)
             model.materialCount = materialCount;
             model.materials = (Material *)RL_CALLOC(model.materialCount, sizeof(Material));
             TraceLog(LOG_INFO, "MODEL: model has %i material meshes", materialCount);
-        } 
+        }
         else
         {
             model.meshCount = 1;
@@ -2997,9 +3069,9 @@ static Model LoadOBJ(const char *fileName)
         // count the faces for each material
         int *matFaces = RL_CALLOC(meshCount, sizeof(int));
 
-        for (int mi = 0; mi < meshCount; mi++)
+        for (unsigned int mi = 0; mi < meshCount; mi++)
         {
-            for (int fi = 0; fi < meshes[mi].length; fi++)
+            for (unsigned int fi = 0; fi < meshes[mi].length; fi++)
             {
                 int idx = attrib.material_ids[meshes[mi].face_offset + fi];
                 if (idx == -1) idx = 0; // for no material face (which could be the whole model)
@@ -3034,7 +3106,7 @@ static Model LoadOBJ(const char *fileName)
         {
             int mm = attrib.material_ids[af];   // mesh material for this face
             if (mm == -1) { mm = 0; }           // no material object..
-            
+
             // Get indices for the face
             tinyobj_vertex_index_t idx0 = attrib.faces[3 * af + 0];
             tinyobj_vertex_index_t idx1 = attrib.faces[3 * af + 1];
@@ -3099,7 +3171,8 @@ static Model LoadOBJ(const char *fileName)
         tinyobj_shapes_free(meshes, meshCount);
         tinyobj_materials_free(materials, materialCount);
 
-        //RL_FREE(fileData);
+        RL_FREE(fileData);
+        RL_FREE(matFaces);
 
         RL_FREE(vCount);
         RL_FREE(vtCount);

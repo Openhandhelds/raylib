@@ -28,8 +28,6 @@ if (APPLE AND NOT CMAKE_SYSTEM STRLESS "Darwin-18.0.0")
   add_definitions(-DGL_SILENCE_DEPRECATION)
   MESSAGE(AUTHOR_WARNING "OpenGL is deprecated starting with macOS 10.14 (Mojave)!")
 endif()
-set(OUTPUT_EXT)
-list(REMOVE_ITEM example_sources ${CMAKE_CURRENT_SOURCE_DIR}/others/rlgl_standalone.c)
 
 include(CheckIncludeFile)
 CHECK_INCLUDE_FILE("stdatomic.h" HAVE_STDATOMIC_H)
@@ -85,12 +83,12 @@ elseif(${PLATFORM} MATCHES "Web")
   # Since WASM is used, ALLOW_MEMORY_GROWTH has no extra overheads
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -s ALLOW_MEMORY_GROWTH=1 --no-heap-copy")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} --shell-file ${CMAKE_SOURCE_DIR}/src/shell.html")
-  set(OUTPUT_EXT ".html")
+  set(CMAKE_EXECUTABLE_SUFFIX ".html")
 
   # Remove the -rdynamic flag because otherwise emscripten
   # does not generate HTML+JS+WASM files, only a non-working
   # and fat HTML
-  string(REPLACE "-rdynamic" "" CMAKE_SHARED_LIBRARY_LINK_C_FLAGS ${CMAKE_SHARED_LIBRARY_LINK_C_FLAGS})
+  string(REPLACE "-rdynamic" "" CMAKE_SHARED_LIBRARY_LINK_C_FLAGS "${CMAKE_SHARED_LIBRARY_LINK_C_FLAGS}")
 endif()
 
 include_directories(BEFORE SYSTEM others/external/include)
@@ -103,7 +101,7 @@ endif()
 foreach(example_source ${example_sources})
   # Create the basename for the example
   get_filename_component(example_name ${example_source} NAME)
-  string(REPLACE ".c" "${OUTPUT_EXT}" example_name ${example_name})
+  string(REPLACE ".c" "" example_name ${example_name})
 
   # Setup the example
   add_executable(${example_name} ${example_source})
@@ -119,20 +117,6 @@ foreach(example_source ${example_sources})
     set_target_properties(${example_name} PROPERTIES LINK_FLAGS "--preload-file ${resources_dir}")
   endif()
 endforeach()
-
-if (${PLATFORM} MATCHES "Desktop")
-  # rlgl_standalone can't be linked with raylib because of duplicate rlgl symbols
-  foreach (example_source "others/rlgl_standalone.c")
-    # Create the basename for the example
-    get_filename_component(example_name ${example_source} NAME)
-    string(REPLACE ".c" "${OUTPUT_EXT}" example_name ${example_name})
-    add_executable(${example_name} ${example_source})
-    add_dependencies(${example_name} raylib)
-    target_link_libraries(${example_name} ${raylib_LDFLAGS})
-    target_include_directories(${example_name} PRIVATE ${raylib_INCLUDE_DIRS})
-
-  endforeach()
-endif()
 
 # Copy all of the resource files to the destination
 file(COPY ${example_resources} DESTINATION "resources/")
